@@ -1,0 +1,7 @@
+
+test fastrom with libc.asm and libc_c.c
+
+
+test fast hirom implementation
+
+

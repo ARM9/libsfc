@@ -1,0 +1,100 @@
+;while(++j < 543)
+;	oamBuffer[j] = 0x55;
+
+__local_4:
+lda.w j + 0
+inc a
+sta.b tcc__r0
+sta.w j + 0
+ldx #1
+lda.b tcc__r0
+sec
+sbc.w #543
+tay
+bcc ++
++ dex
+++
+stx.b tcc__r5
+txa
+bne +
+brl __local_3
++
+lda.w #:__tccs_oamBuffer
+sta.b tcc__r0h
+lda.w #__tccs_oamBuffer + 0
+sta.b tcc__r0
+lda.w j + 0
+clc
+adc.b tcc__r0
+sta.b tcc__r0
+lda.w #85
+sta.b tcc__r1
+sep #$20
+sta.b [tcc__r0]
+rep #$20
+bra __local_4
+
+;while(j < 543)
+;	oamBuffer[++j] = 0x55;
+; assembly is one line shorter
+__local_4:
+lda.w j + 0
+sta.b tcc__r0
+ldx #1
+sec
+sbc.w #543
+tay
+bcc ++
++ dex
+++
+stx.b tcc__r5
+txa
+bne +
+brl __local_3
++
+lda.w j + 0
+inc a
+sta.b tcc__r0
+sta.w j + 0
+lda.w #:__tccs_oamBuffer
+sta.b tcc__r1h
+lda.w #__tccs_oamBuffer + 0
+clc
+adc.b tcc__r0
+sta.b tcc__r1
+lda.w #85
+sta.b tcc__r0
+sep #$20
+sta.b [tcc__r1]
+rep #$20
+bra __local_4
+
+
+
+
+function vs macro:
+enableBG(0x11);
+
+enableBG:
+	sep #$20
+	lda 4,s
+	sta.l $00212C
+	rep #$20
+	rtl
+
+pea.w 17 ;5
+jsr.l enableBG ;6
+pla ;4
+
+REG_TM = 0x11;
+
+lda.w #17
+sta.b tcc__r0
+lda.w #8492
+sta.b tcc__r9
+lda.w #0
+sta.b tcc__r9h
+sep #$20
+lda.b tcc__r0
+sta.b [tcc__r9]
+rep #$20

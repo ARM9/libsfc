@@ -1,0 +1,1 @@
+#ifndef _LIBSFC_GSU#define _LIBSFC_GSU#endif

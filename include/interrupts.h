@@ -1,0 +1,1 @@
+#ifndef _LIBSFC_INTERRUPTS#define _LIBSFC_INTERRUPTS#include "sfc_regs.h"#endif

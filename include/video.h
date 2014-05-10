@@ -1,0 +1,1 @@
+#ifndef _LIBSFC_VIDEO#define _LIBSFC_VIDEO#include "sfc_regs.h"//extern void enableBG(unsigned char flags); //I think this is faster than a macro and takes less space in the binaryextern void makeMode7Game();#endif

@@ -1,0 +1,714 @@
+
+	TCC-816 calling convention, datatypes and optimization
+
+When writing your own functions in assembly for use in C programs compiled with tcc-816
+there are a couple of things you should keep in mind.
+First and foremost, tcc-816 does not care what you pass to a function that is written in assembly.
+So long as the function is declared extern in any included C header file but not defined in C,
+tcc-816 will generate certain assembly code depending on the arguments passed.
+Thankfully tcc-816 is consistent in that it always has the accumulator in 16-bit mode when calling extern functions (index registers seem to always be 16-bit, if anyone can find an instance of tcc switching these to 8-bit, let me know).
+Tcc-816 passes all explicit value arguments to implicit functions as 16 bit values on the stack.
+However, once you start incorporating explicitly declared functions taking different size arguments tcc will use the appropriate accumulator size when pushing these values onto the stack.
+
+Declare consts in global scope to actually make them const.
+Local auto variables, structs and arrays live on the stack which is in $7E:1FFF descending.
+Avoid using auto structs/arrays in local scope, make your local structs/arrays static at least (less slow, lower risk of stack overflow etc).
+All global auto/static and local static variables/structs/arrays go in bank $7F if initialized.
+If not initialized they go in bank $7E.
+TCC-816 actually optimizes absolute addressing to 16-bit addresses when accessing things from bank $7E. So if you don't initialize your statics and use globals where applicable, you get faster code.
+Store less performance critical variables in bank $7F (by initializing) since these are accessed by long addressing.
+Performance is generally as such:
+Uninitialized global/static(bank $7E) > stack($7E:1FFF desc) > initialized global/static ($7F)
+
+The problem with the stack is that you run out of memory faster than the other areas, mainly due to function calls. If you put everything on the stack (especially big datatypes like structs or arrays) you risk running into 
+I probably don't need to mention that recursion is a bad idea.
+
+	--- TCC Generated code of an example function ---
+in C header:
+extern void setupHDMA(uint8_t A, uint16_t B, uint16_t C, uint8_t D);
+//Warning: if declared in a C source file, tcc-816 will respect argument size.
+
+When called from a C source file, this is how the generated assembly will pass
+the arguments for the function onto the stack:
+
+; setupHDMA(15, 333, 2, 2); args passed right to left, all as 16 bit
+	pea.w 2			; D stack index: 12
+	pea.w 2			; C stack index: 10
+	pea.w 333		; B stack index: 8
+	pea.w 15		; A stack index: 6
+	jsl setupHDMA	;   stack index: 3
+	;...
+; jsl is used for all extern function calls (afaik) 
+; pushes 24-bit (3 bytes bank:address) return address onto the stack
+setupHDMA:
+	;some examples of common in-routine pushing that might be desireable
+	php	; stack index : 2
+	phb	; stack index : 1 top of the stack
+		; stack index : 0 high byte of last 16-bit value pulled from the stack (next free byte on stack)
+
+
+	--- Some examples of passing consts, extern and local variables and pointers on the stack ---
+
+main.h:
+extern void func(uint8_t x, uint16_t y); //extern routine written in assembly
+//WARNING: Note that you can push any number of arguments with an implicitly declared function call.
+
+main.c:
+extern uint16_t extern_var; //extern variable declared in assembly
+const uint16_t const_var = 0xFF0F;
+
+
+int main(void){
+	//const uint16_t const_var = 0xFF0F; //passed on the stack for god knows what reason
+	uint16_t local_var = 0x6; //on the stack
+	static uint16_t slocal_var = 0xF; // this is local to main.s, slower than stack because initialized in definition so it is placed in bank $7F.
+	//slocal = short for static local, couldn't think of anything better
+	
+	uint16_t* ptr_to_extern = &extern_var; //pointer on the stack, pointers are generally slower when the stack is involved
+	static uint16_t* sptr_to_extern = &extern_var; //local to main.s
+	
+	uint16_t* ptr_to_local = &local_var;
+	static uint16_t* sptr_to_local;
+	sptr_to_local = &local_var;
+	
+	uint16_t* ptr_to_static_local = &slocal_var;
+	static uint16_t* sptr_to_static_local = &slocal_var;
+	
+	...
+
+	func(extern_var, extern_var);
+generates:
+	lda.l extern_var + 0
+	pha
+	lda.l extern_var + 0
+	pha
+	jsr.l func
+
+
+	func(const_var); //tcc-816 won't complain because it considers the
+                     //declaration implicit with only one argument
+generates:
+	lda.l const_var + 0
+	pha
+	;From now on jsl is implied
+
+	func(local_var);
+generates:
+	lda -10 + __main_locals + 1,s
+	pha
+
+
+	func(slocal_var);
+generates:
+	lda.l __tccs__FUNC_main_slocal_var + 0
+	pha
+
+
+	func(&const_var);
+generates:
+	pea.w :const_var
+	pea.w const_var + 0
+
+
+	func(&extern_var);
+generates:
+	pea.w :extern_var
+	pea.w extern_var + 0
+
+
+	func(&local_var);
+generates (note: stack pointer):
+	stz.b tcc__r0h ;4
+	tsa ;2
+	clc ;2
+	adc #(-10 + __main_locals + 1) ;3
+	pei (tcc__r0h) ;6
+	pha ;3
+	
+
+	func(&slocal_var);
+generates:
+	pea.w :__tccs__FUNC_main_slocal_var
+	pea.w __tccs__FUNC_main_slocal_var + 0
+	;10 cycles
+
+	func(ptr_to_extern);
+generates:
+	lda -16 + __main_locals + 1,s
+	sta.b tcc__r0
+	lda -14 + __main_locals + 1,s
+	pha
+	pei (tcc__r0)
+
+
+	func(sptr_to_extern);
+generates:
+	lda.l __tccs__FUNC_main_sptr_to_extern + 0
+	sta.b tcc__r0
+	lda.l __tccs__FUNC_main_sptr_to_extern + 0 + 2
+	pha
+	pei (tcc__r0)
+
+
+	func(ptr_to_local);
+generates:
+	lda -20 + __main_locals + 1,s
+	sta.b tcc__r0
+	lda -18 + __main_locals + 1,s
+	pha
+	pei (tcc__r0)
+
+
+	func(sptr_to_local);
+generates:
+	lda.w __tccs__FUNC_main_sptr_to_local + 0
+	sta.b tcc__r0
+	lda.w __tccs__FUNC_main_sptr_to_local + 0 + 2
+	pha
+	pei (tcc__r0)
+
+
+	func(ptr_to_static_local);
+generates:
+	lda -24 + __main_locals + 1,s
+	sta.b tcc__r0
+	lda -22 + __main_locals + 1,s
+	pha
+	pei (tcc__r0)
+
+
+	func(sptr_to_static_local);
+generates:
+	lda.l __tccs__FUNC_main_sptr_to_static_local + 0
+	sta.b tcc__r0
+	lda.l __tccs__FUNC_main_sptr_to_static_local + 0 + 2
+	pha
+	pei (tcc__r0)
+
+Pointers (const pointers too) seem to be passed the same way no matter what they point to (arrays, multi-dimensional arrays, structs, functions) depending only on whether static or not.
+
+	--- Some examples of passing arrays on the stack ---
+
+main.c:
+...
+const uint16_t const_arr[5] = {0,1,2,3,4};
+extern uint16_t extern_arr[5];
+
+int main(void){
+	...
+	uint16_t local_arr[5];
+	static uint16_t slocal_arr[5];
+	...
+
+	func(local_arr);
+generates:
+	stz.b tcc__r0h
+	tsa
+	clc
+	adc #(-34 + __main_locals + 1) ; we get absolute address on stack
+	pei (tcc__r0h)
+	pha
+
+
+	func(slocal_arr);
+generates:
+	pea.w :__tccs__FUNC_main_slocal_arr
+	pea.w __tccs__FUNC_main_slocal_arr + 0
+
+
+	func(const_arr);
+generates:
+	pea.w :const_arr
+	pea.w const_arr + 0
+
+
+	func(extern_arr);
+generates:
+	pea.w :extern_arr
+	pea.w extern_arr + 0
+
+
+	func(local_arr[4]);
+generates:
+	stz.b tcc__r0h
+	tsa
+	clc
+	adc #(-12 + __main_locals + 1)
+	clc
+	adc.w #8
+	sta.b tcc__r0
+	lda.b [tcc__r0]
+	pha
+
+
+	func(slocal_arr[4]);
+generates:
+	lda.l __tccs__FUNC_main_slocal_arr + 8
+	pha
+
+
+	--- Signed vs Unsigned and different sized variables---
+I will only cover practical types, long and float are always slow.
+If I were to summarize this segment in one sentence...
+Avoid typecast between signed and unsigned and don't cast signed int from/to signed char.
+
+void uchar_func(unsigned char a){int i = a;}
+void char_func(char a){int i = a;}
+void uint_func(unsigned int a){int i = a;}
+void int_func(int a){int i = a;}
+
+int main(void){
+	uint16_t local_arr[5];
+	static uint16_t unsigned_slocal_arr[5];
+	static int signed_slocal_arr[5];
+	
+	static char signed_slocal_char = 5;
+	static unsigned char signed_slocal_char = 5;
+	...
+	
+	uchar_func(unsigned_slocal_arr[4]); //passing int to function that takes unsigned char
+generates:
+	lda.l __tccs__FUNC_main_unsigned_slocal_arr + 8
+	and.w #255
+	sep #$20
+	pha
+	rep #$20
+	
+
+	char_func(unsigned_slocal_arr[4]); //passing int to function that takes char
+generates:
+	lda.l __tccs__FUNC_main_unsigned_slocal_arr + 8
+	xba
+	and #$ff00
+	sta.b tcc__r0
+	ldy.w #8
+	-
+	cmp #$8000
+	ror a
+	dey
+	bne -
+	+
+	sep #$20
+	pha
+	rep #$20
+
+
+	uint_func(unsigned_slocal_arr[4]);
+generates:
+	lda.l __tccs__FUNC_main_unsigned_slocal_arr + 8
+	pha
+
+
+	int_func(unsigned_slocal_arr[4]);
+generates:
+	lda.l __tccs__FUNC_main_unsigned_slocal_arr + 8
+	pha
+
+
+	uchar_func(signed_slocal_arr[4]);
+generates:
+	lda.l __tccs__FUNC_main_signed_slocal_arr + 8
+	and.w #255
+	sep #$20
+	pha
+	rep #$20
+
+
+	char_func(signed_slocal_arr[4]);
+generates:
+	lda.l __tccs__FUNC_main_signed_slocal_arr + 8
+	xba
+	and #$ff00
+	sta.b tcc__r0
+	ldy.w #8
+	-
+	cmp #$8000
+	ror a
+	dey
+	bne -
+	+
+	sep #$20
+	pha
+	rep #$20
+
+
+	uint_func(signed_slocal_arr[4]);
+generates:
+	lda.l __tccs__FUNC_main_signed_slocal_arr + 8
+	pha
+
+
+	int_func(signed_slocal_arr[4]);
+generates:
+	lda.l __tccs__FUNC_main_signed_slocal_arr + 8
+	pha
+
+
+	uchar_func(signed_slocal_char);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_signed_slocal_char + 0
+	rep #$20
+	xba
+	xba
+	bpl +
+	ora.w #$ff00	; uhm
+	+
+	and.w #255		; yeah...
+	sep #$20
+	pha
+	rep #$20
+
+
+	char_func(signed_slocal_char);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_signed_slocal_char + 0
+	rep #$20
+	xba
+	xba
+	bpl +
+	ora.w #$ff00
+	+
+	sep #$20
+	pha
+	rep #$20
+
+
+	uint_func(signed_slocal_char);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_signed_slocal_char + 0
+	rep #$20
+	xba
+	xba
+	bpl +
+	ora.w #$ff00
+	+
+	pha
+
+
+	int_func(signed_slocal_char);
+generates:
+	same as uint_func(signed_slocal_char);
+
+
+	uchar_func(unsigned_slocal_char);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_unsigned_slocal_char + 0
+	pha
+	rep #$20
+
+
+	char_func(unsigned_slocal_char);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_unsigned_slocal_char + 0
+	rep #$20
+	xba
+	and #$ff00
+	sta.b tcc__r0
+	ldy.w #8
+	-
+	cmp #$8000
+	ror a
+	dey
+	bne -
+	+
+	sep #$20
+	pha
+	rep #$20
+
+
+	uint_func(unsigned_slocal_char);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_unsigned_slocal_char + 0
+	rep #$20
+	pha
+
+
+	int_func(unsigned_slocal_char);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_unsigned_slocal_char + 0
+	rep #$20
+	pha
+
+
+
+	--- Passing and returning different sized variables---
+
+main.c:
+uint8_t func8_8(uint8_t x){return x+1;}
+uint8_t func8_16(uint16_t x){return x+1;}
+uint16_t func16_8(uint8_t x){return x+1;}
+
+unsigned int udiv16by8(unsigned int num, unsigned char denom);
+
+int main(void){
+	...
+	uint8_t foo = 5;
+	uint16_t bar = 5555;
+
+
+	foo = func8_8(foo);
+generates:
+	lda.w #0
+	sep #$20
+	lda -11 + __main_locals + 1,s
+	pha
+	rep #$20
+	jsr.l func8_8
+	tsa
+	clc
+	adc #1
+	tas
+	sep #$20
+	lda.b tcc__r0
+	sta -11 + __main_locals + 1,s
+	rep #$20
+
+
+	foo = func8_16(bar);
+generates:
+	lda -14 + __main_locals + 1,s
+	pha
+	jsr.l func8_16
+	pla
+	sep #$20
+	lda.b tcc__r0
+	sta -11 + __main_locals + 1,s
+	rep #$20
+
+
+	bar = func16_8(foo);
+generates:
+	lda.w #0
+	sep #$20
+	lda -11 + __main_locals + 1,s
+	pha
+	rep #$20
+	jsr.l func16_8
+	tsa
+	clc
+	adc #1
+	tas
+	lda.b tcc__r0
+	sta -14 + __main_locals + 1,s
+
+
+	foo = func8_8((uint16_t)foo);
+generates:
+	lda.w #0
+	sep #$20
+	lda -11 + __main_locals + 1,s
+	rep #$20
+	and.w #255
+	sep #$20
+	pha
+	rep #$20
+	jsr.l func8_8
+	tsa
+	clc
+	adc #1
+	tas
+	sep #$20
+	lda.b tcc__r0
+	sta -11 + __main_locals + 1,s
+	rep #$20
+
+
+	foo = func8_16((uint8_t)bar);
+generates:
+	lda -14 + __main_locals + 1,s
+	and.w #255
+	pha
+	jsr.l func8_16
+	pla
+	sep #$20
+	lda.b tcc__r0
+	sta -11 + __main_locals + 1,s
+	rep #$20
+
+
+	bar = func16_8((uint16_t)foo);
+generates:
+	lda.w #0
+	sep #$20
+	lda -11 + __main_locals + 1,s
+	rep #$20
+	and.w #255
+	sep #$20
+	pha
+	rep #$20
+	jsr.l func16_8
+	tsa
+	clc
+	adc #1
+	tas
+	lda.b tcc__r0
+	sta -14 + __main_locals + 1,s
+
+
+	foo = udiv16by8((uint8_t)foo, bar);
+generates:
+	lda.w #0
+	sep #$20
+	lda.l __tccs__FUNC_main_foo + 0
+	rep #$20
+	sta.b tcc__r0
+	lda.l __tccs__FUNC_main_bar + 0
+	and.w #255
+	sep #$20
+	pha
+	rep #$20
+	pei (tcc__r0)
+	jsr.l udiv16by8
+	tsa
+	clc
+	adc #3
+	tas
+	sep #$20
+	lda.b tcc__r0
+	sta.l __tccs__FUNC_main_foo + 0
+	rep #$20
+
+	--- Returning pointers ---
+Note: It only matters whether you send a pointer to signed or unsigned when writing your functions in C.
+When defining your functions in assembly it's up to you to use what they point to correctly, the actual pointers will look the same.
+
+main.c:
+
+uint8_t* func16to8_ptr(uint16_t* x){return (uint8_t*)x+1;}
+uint16_t* func8to16_ptr(uint8_t* x){return (uint16_t*)x+1;}
+
+int main(void){
+	static uint8_t foo = 5;
+	static uint16_t bar = 5555;
+	...
+
+	uint8_t* barp = func16to8_ptr(&bar);
+generates:
+	pea.w :__tccs__FUNC_main_bar
+	pea.w __tccs__FUNC_main_bar + 0
+	jsr.l func16to8_ptr
+	tsa
+	clc
+	adc #4
+	tas
+	lda.b tcc__r0
+	sta -16 + __main_locals + 1,s
+	lda.b tcc__r0h
+	sta -14 + __main_locals + 1,s
+
+
+	uint16_t* foop = func8to16_ptr(&foo);
+generates:
+	pea.w :__tccs__FUNC_main_foo
+	pea.w __tccs__FUNC_main_foo + 0
+	jsr.l func8to16_ptr
+	tsa
+	clc
+	adc #4
+	tas
+	lda.b tcc__r0
+	sta -20 + __main_locals + 1,s
+	lda.b tcc__r0h
+	sta -18 + __main_locals + 1,s
+
+
+	--- 32-bit datatypes ---
+The implementations for local 32-bit integers (and float) are reeeeeeeeeally slow.
+Only use these with static.
+To demonstrate how ridiculously slow these are, here's a sample:
+ 
+uint32_t funcu32(uint32_t x){
+	return x+0x12341234;
+}
+
+int32_t func32(int32_t x){
+	return x+0xF1231234;
+}
+int main(void){
+	...
+	
+	uint32_t bigfoo = 0xFF00FF00;
+	bigfoo = funcu32(bigfoo);
+generates:
+	lda.w #65280
+	sta.b tcc__r0
+	lda.w #65280
+	sta.b tcc__r1
+	lda.b tcc__r0
+	sta -20 + __main_locals + 1,s
+	stz.b tcc__r2h
+	tsa
+	clc
+	adc #(-20 + __main_locals + 1) + 2
+	sta.b tcc__r2
+	lda.b tcc__r1
+	sta.b [tcc__r2] ; assignment ends here
+	lda -20 + __main_locals + 1,s ; function call begins here
+	sta.b tcc__r0
+	stz.b tcc__r1h
+	tsa
+	clc
+	adc #(-20 + __main_locals + 1) + 2
+	sta.b tcc__r1
+	lda.b [tcc__r1]
+	pha
+	pei (tcc__r0)
+	jsr.l funcu32
+	tsa
+	clc
+	adc #4
+	tas
+	lda.b tcc__r0
+	sta -20 + __main_locals + 1,s
+	stz.b tcc__r2h
+	tsa
+	clc
+	adc #(-20 + __main_locals + 1) + 2
+	sta.b tcc__r2
+	lda.b tcc__r1
+	sta.b [tcc__r2]
+
+Not to mention the generated assembly for funcu32 and func32.. It's huge, let's just leave it at that.
+ 
+And now static:
+
+	static uint32_t bigfoo = 0xFF00FF00;
+	bigfoo = funcu32(bigfoo);
+generates:
+	lda.l __tccs__FUNC_main_bigfoo + 0
+	sta.b tcc__r0
+	lda.l __tccs__FUNC_main_bigfoo + 2
+	pha
+	pei (tcc__r0)
+	jsr.l funcu32
+	tsa
+	clc
+	adc #4
+	tas
+	lda.b tcc__r0
+	sta.l __tccs__FUNC_main_bigfoo + 0
+	lda.b tcc__r1
+	sta.l __tccs__FUNC_main_bigfoo + 2
+
+
+	static int32_t bigbar = 0xFF00FF00;
+	bigbar = func32(bigbar);
+generates:
+	same as unsigned, except signedness slowness if you happen to use negative numbers.
+
+As usual static is much faster than local variables.
+
