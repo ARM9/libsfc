@@ -189,7 +189,6 @@ int main(void){
 		j+=4;
 	}
 	
-	//while(REG_HVBJOY != 0x80){} // shitty way to wait for vblank
 	srand(0x1337);
 	static uint8_t numpads = 1;
 	
