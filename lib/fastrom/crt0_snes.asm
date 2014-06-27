@@ -53,7 +53,7 @@ _libsfc_r7 dsb 2
 .SECTION "EmptyVectors" SEMIFREE
 
 EmptyHandler:
-	.dw $0000;don't use empty handlers
+	.dw $0000 ; don't use empty handlers
 
 EmptyNMI:
 	rtl
@@ -127,23 +127,8 @@ tcc__snesinit:
 -	stz 0,x
 	stz 0,x
 	inx
-	cpx.w #$211e
+	cpx.w #$2121
 	bne -
-
-        ; $211E   ; Mode 7 matrix parameter D register (low)
-        ; $211E   ; Mode 7 matrix parameter D register (high) <= 1!
-	stz 0,x
-	sta 0,x
-        ; $211F   ; Mode 7 center position X register (low)
-        ; $211F   ; Mode 7 center position X register (high)
-	stz 1,x
-	stz 1,x
-        ; $2120   ; Mode 7 center position Y register (low)
-        ; $2120   ; Mode 7 center position Y register (high)
-	stz 2,x
-	stz 2,x
-	; $2121   ; Color number register ($0-ff)
-	stz 3,x
 
         ; $2123   ; BG1 & BG2 Window mask setting register
         ; $2124   ; BG3 & BG4 Window mask setting register
@@ -157,17 +142,8 @@ tcc__snesinit:
 	ldx.w #$2123
 -	stz 0,x
 	inx
-	cpx.w #$212c
+	cpx.w #$2130
 	bne -
-	
-        ; $212C   ; Main Screen designation (planes, sprites enable)
-	stz 0,x
-        ; $212D   ; Sub Screen designation
-	stz 1,x
-        ; $212E   ; Window mask for Main Screen
-	stz 2,x
-        ; $212F   ; Window mask for Sub Screen
-	stz 3,x
 
         lda     #$30
         sta     $2130   ; Color addition & screen addition init setting
@@ -198,7 +174,7 @@ tcc__snesinit:
 	bne -
 	
 	lda #$01
-	sta 0,x;$420D
+	sta 0,x ;$420D
 	
 	;A=8, X/Y=16
 ;ClearPPU:
@@ -236,8 +212,6 @@ tcc__snesinit:
 	
 	lda #$01
 	sta $420B
-	
-	stz $2119
 	
 ;CGRAM
 	stz $2121

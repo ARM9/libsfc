@@ -8,8 +8,6 @@ Release/
 *.smc
 *.sym
 *.spc
-*.it
-*.npp
 *.bnk
 *.rom
 *.wav
@@ -17,17 +15,22 @@ Release/
 *.pnps
 *.vcproj
 *.vim
+*.swp
+*.tmp
 *.sln
 *.ncb
 *.suo
 *.user
 
-*.*~
+.*~
+*~
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
+.tags
+tags
 Icon?
 ehthumbs.db
 Thumbs.db
